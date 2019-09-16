@@ -16,21 +16,6 @@
 //Globals cos reasons
 pthread_mutex_t lock;
 volatile sig_atomic_t usr_interrupt = 0;
-/*
-
-struct semaphore{
-    int* avaible;
-    int* resource;
-};
-
-struct semaphore* new_semaphore(int* pResource) {
-    struct semaphore* sem = malloc(sizeof(struct semaphore));
-    sem->avaible = (int*) malloc(2);
-    *(sem-> avaible) = 1;
-    sem -> resource = pResource;
-    return sem;
-}
-*/
 
 void synch_signal (int sig){
   usr_interrupt = 1;
@@ -73,6 +58,8 @@ struct Cola{
 //max_size = TOTAL_PLAYERS
 struct Cola* new_cola() {
     struct Cola* cola = create_shared_memory(sizeof(struct Cola));
+    cola->inicio = create_shared_memory(sizeof(struct Nodo));
+    cola->final = create_shared_memory(sizeof(struct Nodo));
     cola->inicio = NULL;
     cola->final = NULL;
     cola->size = create_shared_memory(sizeof(int));
@@ -131,8 +118,17 @@ pid_t pop(struct Cola *cola){
   struct Nodo *tmp = cola->inicio;
   cola->inicio = cola->inicio->siguiente;
 
-  free(tmp);
-  return data;
+    if (cola->inicio == cola->final){
+        cola->inicio = NULL;
+        cola->final = NULL;
+        return data;
+    } else {
+        struct Nodo *tmp = cola->inicio;
+        cola->inicio = cola->inicio->siguiente;
+
+        //free(tmp);
+        return data;
+    }
 }
 
 void push(struct Cola *cola, pid_t data){
@@ -182,6 +178,7 @@ void wait_semaphore(struct Semaphore* sem, sigset_t* set){
 void signal_semaphore (struct Semaphore* sem){
   *(sem -> value) = *(sem -> value) + 1;
   if(*(sem -> value) <= 0){//Hay procesos esperando
+    printf("Llegué hasta aquí :p cola-size:%d \n", *sem->cola->size);
     pid_t process_wakeup = pop(sem->cola);
     printf("El proceso a despertar es: %d\n", process_wakeup);
     kill(process_wakeup, SIGUSR1);//Suena que lo mato, pero no es asi
@@ -189,19 +186,6 @@ void signal_semaphore (struct Semaphore* sem){
   printf("Solte el recurso, soy: %d\n", getpid());
 }
 
-/*
-int adquire(struct semaphore* sem){
-    if (*(sem->avaible) == 0) return 0;
-
-    *(sem->avaible) = 0;
-    return 1;
-}
-
-void release(struct semaphore* sem){
-    *(sem->avaible) = 1;
-    return;
-}
-*/
 
 //Permite hacer operaciones de forma atomica
 int compare_and_swap(int *value, int expected, int new_value){
@@ -210,8 +194,6 @@ int compare_and_swap(int *value, int expected, int new_value){
     *value = new_value;
   return temp;
 }
-
-
 
 
 int main(){
@@ -286,11 +268,10 @@ int main(){
   		}
   	}else{
   		//Todos los hijos van a esperar a que inicie el partido
-      while (!*inicioPartido) {
-        ;//BUSY WAITNG
-      }
+      while (!*inicioPartido);//BUSY WAITNG
+
       while(!*finPartido){
-        printf("Voy a jugar\n");
+        printf("[JUGADOR]: Voy a jugar\n");
         //Ahora deben obtener el recurso bola y la cancha
         sleep (1);
         wait_semaphore(semaphoreBall, &set);
@@ -299,48 +280,14 @@ int main(){
         *(semaphoreBall->resource) = *(semaphoreBall->resource) + 1;
         printf("Consegui la bola %d. Yo soy %d\n", *(semaphoreBall->resource), getpid());
         sleep (1);
+        printf("[JUGADOR %d]: Voy a soltar la bola\n", getpid());
         signal_semaphore(semaphoreBall);
-    		sleep (5);
+        printf("[JUGADOR %d]: Solté la bola\n", getpid());
+    	sleep (5);
       }
 
   	}
 
-    /*
-    for (int generated = 0; generated < PLAYERS_PER_TEAM; generated++){
-        if (getpid() == parentID) pid = fork();
-    }
-
-    //Hijos por otro camino
-
-    for (int generated = 0; generated < PLAYERS_PER_TEAM; generated++){
-        if (getpid() == parentID) pid = fork();
-    }
-
-    //
-
-    if (pid < 0){
-        printf("Welp I failed\n");
-        return 1;
-    } else if (pid > 0){
-        printf("[Arbiter]: Start! \n");
-        //Waits for 5min before killing everyone
-        wait(NULL);
-        printf("ball %d\n", *p); //No one is using it so :p
-    } else {
-
-        if (adquire(semP) == 0){
-            printf("[Player]: Almost\n");
-        } else {
-            printf("[Player]: It's mine\n");
-            sleep(2);
-            printf("[Player]: There, have it\n");
-            release(semP);
-        }
-
-        //printf("[Player]: I'm a player process\n");
-        sleep(2);
-    }
-    */
     return 0;
 
 }
