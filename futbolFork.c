@@ -76,13 +76,13 @@ pid_t pop(struct Cola *cola){
   cola->inicio = cola->inicio->siguiente;//Nuevo inicio
   cola->final = cola->final->siguiente;
   cola->final->data = NULL;
-
-  return data;
+    return data;
 }
 
-void push(struct Cola *cola, pid_t pid){
+int push(struct Cola *cola, pid_t pid){
   if (cola->size == cola->max_size) {
     printf("ERROR: La cola esta llena\n");
+    return 0;
   }else{
     struct Nodo *tmp = cola->inicio;
 
@@ -94,8 +94,10 @@ void push(struct Cola *cola, pid_t pid){
       *(tmp->data) = pid;
     }else{
       printf("ERROR: Ya existen datos en el nodo\n");
+      return 0;
     }
     *(cola->size) = *(cola->size) + 1;
+    return 1;
   }
 }
 
@@ -163,27 +165,36 @@ struct Semaphore* new_semaphore(int* pResource) {
 }
 
 //El proceso que desea el recurso lo solicita
-void wait_semaphore(struct Semaphore* sem, sigset_t* set){
+//Devuelve un numero para saber si se pudo guardar exitosamente
+int wait_semaphore(struct Semaphore* sem, sigset_t* set){
   int return_val;
   *(sem -> value) = *(sem -> value) - 1; // *(sem -> value)--  NO SIRVE
   if(*(sem -> value) < 0){
     //Se debe agregar a la lista de procesos que esperan el recurso
-    push(sem->cola, getpid());
-    printf("COLA SIZE: %d \n", *sem->cola->size);
+    if (push(sem->cola, getpid()) == 0){
+        return 0;
+    }
     //Se suspende el proceso para que espere por el recurso
     sigwait(set, &return_val);
     printf("Soy el siguiente y recibi signal, soy: %d\n", getpid());
   }
+
+  return 1;
 }
 
 //El proceso que ya uso el recurso lo notifica
 void signal_semaphore (struct Semaphore* sem){
   *(sem -> value) = *(sem -> value) + 1;
   if(*(sem -> value) <= 0){//Hay procesos esperando
-    printf("Llegué hasta aquí :p cola-size:%d \n", *sem->cola->size);
     pid_t process_wakeup = pop(sem->cola);
-    printf("El proceso a despertar es: %d\n", process_wakeup);
-    kill(process_wakeup, SIGUSR1);//Suena que lo mato, pero no es asi
+
+    if (process_wakeup == -1){
+        printf("Ayuda, la pila esta vacia\n");
+        printf("El proceso a despertar es: %d\n", process_wakeup);
+    } else {
+        kill(process_wakeup, SIGUSR1);//Suena que lo mato, pero no es asi
+    }
+
   }
   printf("Solte el recurso, soy: %d\n", getpid());
 }
@@ -281,7 +292,7 @@ int main(){
       while (!*inicioPartido);//BUSY WAITNG
 
       while(!*finPartido){
-        printf("[JUGADOR]: Voy a jugar\n");
+        printf("[JUGADOR %d]: Voy a jugar\n", getpid());
         //Ahora deben obtener el recurso bola y la cancha
         wait_semaphore(semaphoreBall, &set);
         //TENGO LA BOLA, ahora busco la cancha
