@@ -1,11 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/sem.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
+
 
 #define PLAYERS_PER_TEAM 5
 
@@ -32,29 +35,51 @@ void synch_signal (int sig){
   usr_interrupt = 1;
 }
 
+void* create_shared_memory(size_t size) {
+  // Readable and writable:
+  int protection = PROT_READ | PROT_WRITE;
+
+  // Visibility defined so
+  // Only this process and its children will be able to use it:
+  int visibility = MAP_SHARED | MAP_ANONYMOUS;
+
+  return mmap(NULL, size, protection, visibility, -1, 0);
+}
+
 //Creacion de una cola
 struct Nodo{
-  pid_t data;
+  pid_t* data;
   struct Nodo *siguiente;
 
 };
 
+struct Nodo* new_nodo(pid_t data) {
+    struct Nodo* nodo = create_shared_memory(sizeof(struct Nodo));
+    nodo->data = create_shared_memory(sizeof(pid_t));
+    *(nodo->data) = data;
+    nodo->siguiente = NULL;
+    return nodo;
+}
+
 struct Cola{
   struct Nodo *inicio;
   struct Nodo *final;
-  unsigned int size;
+  unsigned int *size;
 };
 
-void init_cola (struct Cola *cola){
-  cola->inicio = NULL;
-  cola->final = NULL;
-  cola->size = 0;
+struct Cola* new_cola() {
+    struct Cola* cola = create_shared_memory(sizeof(struct Cola));
+    cola->inicio = NULL;
+    cola->final = NULL;
+    cola->size = create_shared_memory(sizeof(int));
+    *(cola->size) = 0;
+    return cola;
 }
 
 pid_t pop(struct Cola *cola){
   cola->size--;
 
-  pid_t data = cola->inicio->data;
+  pid_t data = *(cola->inicio->data);
   struct Nodo *tmp = cola->inicio;
   cola->inicio = cola->inicio->siguiente;
 
@@ -66,57 +91,52 @@ void push(struct Cola *cola, pid_t data){
   cola->size++;
 
   if (cola->inicio == NULL) {
-    cola->inicio = (struct Nodo *) malloc(sizeof(struct Nodo));
-    cola->inicio->data = data;
-    cola->inicio->siguiente = NULL;
+    cola->inicio = new_nodo(data);
     cola->final = cola->inicio;
   }else{
-    cola->final->siguiente = (struct Nodo *) malloc(sizeof(struct Nodo));
-    cola->final->siguiente->data = data;
-    cola->final->siguiente->siguiente = NULL;
+    cola->final->siguiente = new_nodo(data);
     cola->final = cola->final->siguiente;
   }
 }
 
 
 struct Semaphore{
-  int value;
+  int *value;
+  int *resource;
   struct Cola *cola;
 };
 
-void init_semaphore (struct Semaphore *sem){
-  init_cola(sem->cola);
-  sem->value = 1;
+struct Semaphore* new_semaphore(int* pResource) {
+    struct Semaphore* sem = create_shared_memory(sizeof(struct Semaphore));
+    sem->value = create_shared_memory(sizeof(int));
+    *(sem->value) = 1;
+    sem->resource = pResource;
+    sem->cola = new_cola();
+    return sem;
 }
 
 //El proceso que desea el recurso lo solicita
-void wait_semaphore(struct Semaphore* sem){
-  sem -> value--;
-  if(sem -> value < 0){
+void wait_semaphore(struct Semaphore* sem, sigset_t* set){
+  int return_val;
+  *(sem -> value)--;
+  printf("VALOR > %d\n", *(sem -> value));
+  if(*(sem -> value) < 0){
     //Se debe agregar a la lista de procesos que esperan el recurso
     push(sem->cola, getpid());
     //Se suspende el proceso para que espere por el recurso
-    sigset_t mask, oldmask;
-    /* Se establece la mask de las senales que se van a bloquear temporalmente */
-    sigemptyset (&mask);
-    sigaddset (&mask, SIGUSR1);
-    /* Se espera por la senal SIGUSR1 */
-    sigprocmask (SIG_BLOCK, &mask, &oldmask);
-    //while (!usr_interrupt)
-      //sigsuspend (&oldmask);
-    sigsuspend (&oldmask);
-    sigprocmask (SIG_UNBLOCK, &mask, NULL);
-
+    sigwait(set, &return_val);
+    printf("Soy el siguiente y recibi signal, soy: %d\n", getpid());
   }
 }
 
 //El proceso que ya uso el recurso lo notifica
 void signal_semaphore (struct Semaphore* sem){
-  sem -> value++;
-  if(sem -> value <= 0){
+  *(sem -> value)++;
+  if(*(sem -> value) <= 0){
     pid_t process_wakeup = pop(sem->cola);
     kill(process_wakeup, SIGUSR1);//Suena que lo mato, pero no es asi
   }
+  printf("Solte el recurso, soy: %d\n", getpid());
 }
 
 /*
@@ -142,13 +162,28 @@ int compare_and_swap(int *value, int expected, int new_value){
 }
 
 
-int main(){
-    int* goalA = malloc( sizeof(int) );
-    int* goalB = malloc( sizeof(int) );
 
-    int* ball = malloc( sizeof(int) );
+
+int main(){
+    //Signals info
+    sigset_t set;
+    sigfillset(&set);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+
+    //Program
+    int* goalA = create_shared_memory( sizeof(int) );
+    int* goalB = create_shared_memory( sizeof(int) );
+
+    int* ball = create_shared_memory( sizeof(int) );
 
     int tiempoEspera;
+
+    bool* inicioPartido = create_shared_memory( sizeof(bool) );
+    *inicioPartido = false;
+    bool* finPartido = create_shared_memory( sizeof(bool) );
+    *finPartido = false;
+
+    struct Semaphore *semaphoreBall = new_semaphore(ball);
 
     //int* p = (int*) malloc(2); //Pruebas
     //*p = 0;
@@ -157,7 +192,7 @@ int main(){
 
     int cantidadJugadores = 10;
     pid_t parentID = getpid();
-    pid_t arrayPIDs[cantidadJugadores*2];//Se almacenan los procesos hijos
+    pid_t arrayPIDs[cantidadJugadores];//Se almacenan los procesos hijos
     int c = 0;//Contador
     char equipo;
     printf("Arbiter ID: %d.!\n", parentID);
@@ -189,14 +224,34 @@ int main(){
 
     if (getpid() == parentID) {
   		//Instrucción dirigida al padre
+      sleep(1);
+      printf("Inicio del partido\n");
+      *inicioPartido = true;
+      sleep(5);//Cantidad de segundos que dura el partido
+      *finPartido = true;
+
   		for (int i = 0; i < cantidadJugadores; i++) {
   			waitpid(arrayPIDs[i], NULL, 0);//Esperamos por cada hijo de forma individual
   			printf("El Proceso Hijo: #%d ha terminado. El padre #%d \n",  arrayPIDs[i], getppid());
   		}
   	}else{
-  		//Todos los hijos van a esperar
-      printf("Voy a jugar\n");
-  		sleep (5);
+  		//Todos los hijos van a esperar a que inicie el partido
+      while (!*inicioPartido) {
+        ;//BUSY WAITNG
+      }
+      while(!*finPartido){
+        printf("Voy a jugar\n");
+        //Ahora deben obtener el recurso bola y la cancha
+        wait_semaphore(semaphoreBall, &set);
+        //TENGO LA BOLA
+        sleep (1);
+        *(semaphoreBall->resource) = *(semaphoreBall->resource) + 1;
+        printf("Consegui la bola %d. Yo soy %d\n", *(semaphoreBall->resource), getpid());
+        sleep (1);
+        signal_semaphore(semaphoreBall);
+    		sleep (5);
+      }
+
   	}
 
     /*
