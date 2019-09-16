@@ -118,8 +118,9 @@ struct Semaphore* new_semaphore(int* pResource) {
 //El proceso que desea el recurso lo solicita
 void wait_semaphore(struct Semaphore* sem, sigset_t* set){
   int return_val;
-  *(sem -> value)--;
-  printf("VALOR > %d\n", *(sem -> value));
+  printf("VALOR ANTES WAIT > %d\n", *(sem -> value));
+  *(sem -> value) = *(sem -> value) - 1; // *(sem -> value)--  NO SIRVE
+  printf("VALOR DESPUES WAIT > %d\n", *(sem -> value));
   if(*(sem -> value) < 0){
     //Se debe agregar a la lista de procesos que esperan el recurso
     push(sem->cola, getpid());
@@ -131,8 +132,10 @@ void wait_semaphore(struct Semaphore* sem, sigset_t* set){
 
 //El proceso que ya uso el recurso lo notifica
 void signal_semaphore (struct Semaphore* sem){
-  *(sem -> value)++;
-  if(*(sem -> value) <= 0){
+  printf("VALOR ANTES SIGNAL > %d\n", *(sem -> value));
+  *(sem -> value) = *(sem -> value) + 1;
+  printf("VALOR DESPUES SIGNAL > %d\n", *(sem -> value));
+  if(*(sem -> value) <= 0){//Hay procesos esperando
     pid_t process_wakeup = pop(sem->cola);
     kill(process_wakeup, SIGUSR1);//Suena que lo mato, pero no es asi
   }
@@ -242,6 +245,7 @@ int main(){
       while(!*finPartido){
         printf("Voy a jugar\n");
         //Ahora deben obtener el recurso bola y la cancha
+        sleep (1);
         wait_semaphore(semaphoreBall, &set);
         //TENGO LA BOLA
         sleep (1);
