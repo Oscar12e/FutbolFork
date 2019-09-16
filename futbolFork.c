@@ -10,8 +10,8 @@
 #include <pthread.h>
 #include <time.h>
 
-#define PLAYERS_PER_TEAM 5
-#define TOTAL_PLAYERS 10
+#define PLAYERS_PER_TEAM 6
+#define TOTAL_PLAYERS 12
 
 //Globals cos reasons
 pthread_mutex_t lock;
@@ -113,40 +113,6 @@ void init_push(struct Cola *cola){
   }
 
 }
-/**
-pid_t pop(struct Cola *cola){
-  *(cola->size) = *(cola->size) - 1;
-  printf("POP> %d\n", *(cola->inicio->data));
-  pid_t data = *(cola->inicio->data);
-  struct Nodo *tmp = cola->inicio;
-  cola->inicio = cola->inicio->siguiente;
-
-    if (cola->inicio == cola->final){
-        cola->inicio = NULL;
-        cola->final = NULL;
-        return data;
-    } else {
-        struct Nodo *tmp = cola->inicio;
-        cola->inicio = cola->inicio->siguiente;
-
-        //free(tmp);
-        return data;
-    }
-}
-
-void push(struct Cola *cola, pid_t data){
-  *(cola->size) = *(cola->size) + 1;
-
-  if (cola->inicio == NULL) {
-    cola->inicio = new_nodo(data);
-    cola->final = cola->inicio;
-  }else{
-    cola->final->siguiente = new_nodo(data);
-    cola->final = cola->final->siguiente;
-
-  }
-}
-*/
 
 struct Semaphore{
   int *value;
@@ -196,9 +162,29 @@ void signal_semaphore (struct Semaphore* sem){
     }
 
   }
-  printf("Solte el recurso, soy: %d\n", getpid());
 }
 
+bool wait_semaphore_goals(struct Semaphore* sem){
+  bool conseguido = true;
+  int tries = 0;
+  while (*(sem -> value) <= 0 && tries < 3) {
+    printf("[JUGADOR %d]: Intento de anotar #%d\n", getpid(), tries+1);
+    sleep(1);//Voy a esperar 3 segundos e intentarlo 3 veces
+    tries = tries + 1;
+    if (tries == 3) {
+      conseguido = false;
+    }
+  }
+  if (conseguido) {
+    *(sem -> value) = *(sem -> value) - 1;
+  }
+  return conseguido;
+}
+
+//El proceso que ya uso el recurso lo notifica
+void signal_semaphore_goals(struct Semaphore* sem){
+  *(sem -> value) = *(sem -> value) + 1;
+}
 
 //Permite hacer operaciones de forma atomica
 int compare_and_swap(int *value, int expected, int new_value){
@@ -234,17 +220,13 @@ int main(){
     struct Semaphore *semaphoreGoalA = new_semaphore(goalA);
     struct Semaphore *semaphoreGoalB = new_semaphore(goalB);
 
-    //int* p = (int*) malloc(2); //Pruebas
-    //*p = 0;
-
-    //struct semaphore* semP = new_semaphore(p);
-
-    int cantidadJugadores = 10;
     pid_t parentID = getpid();
-    pid_t arrayPIDs[cantidadJugadores];//Se almacenan los procesos hijos
+    pid_t arrayPIDs[TOTAL_PLAYERS];//Se almacenan los procesos hijos
     int c = 0;//Contador
     char equipo;
+    bool portero = false;
     printf("Arbiter ID: %d.!\n", parentID);
+
     //Se crean los hijos
     do {
 
@@ -257,29 +239,28 @@ int main(){
   			return 1;
   		}
   		else if ( pid == 0 ) {
-  			//execlp("/bin/ls", "ls", NULL);
-        equipo = (c >= cantidadJugadores/2) ? 'B' : 'A';
+        portero = (c == 0 || c == PLAYERS_PER_TEAM) ? true : false;
+        equipo = (c >= PLAYERS_PER_TEAM) ? 'B' : 'A';
   			printf("Equipo %c | Proceso Hijo creado: #%d, proceso padre #%d \n", equipo, getpid() , getppid()); //El hijo está saludando
 
         break;
   		}
   		else { //Parent process
-  			//printf("The parent is creating more childs\n");//El padre va a seguir creando hijs
   			arrayPIDs[c] = pid;//Guardo el ID del hijo creado para poder esperarlo más tarde
   		}
 
   		c += 1;
-  	} while(cantidadJugadores != c);
+  	} while(TOTAL_PLAYERS != c);
 
     if (getpid() == parentID) {
   		//Instrucción dirigida al padre
       sleep(1);
       printf("Inicio del partido\n");
       *inicioPartido = true;
-      sleep(3);//Cantidad de segundos que dura el partido
+      sleep(5);//Cantidad de segundos que dura el partido
       *finPartido = true;
 
-  		for (int i = 0; i < cantidadJugadores; i++) {
+  		for (int i = 0; i < TOTAL_PLAYERS; i++) {
   			waitpid(arrayPIDs[i], NULL, 0);//Esperamos por cada hijo de forma individual
   			printf("El Proceso Hijo: #%d ha terminado. El padre #%d \n",  arrayPIDs[i], getppid());
   		}
@@ -291,32 +272,67 @@ int main(){
   		//Todos los hijos van a esperar a que inicie el partido
       while (!*inicioPartido);//BUSY WAITNG
 
-      while(!*finPartido){
-        printf("[JUGADOR %d]: Voy a jugar\n", getpid());
-        //Ahora deben obtener el recurso bola y la cancha
-        wait_semaphore(semaphoreBall, &set);
-        //TENGO LA BOLA, ahora busco la cancha
-        printf("[JUGADOR %d]: Tengo la bola, voy a buscar la cancha\n", getpid());
-        if (equipo == 'A') {
-          //Anoto en la cancha B
-          wait_semaphore(semaphoreGoalB, &set);
-          printf("[JUGADOR %d]: Tengo la bola y la cancha. Voy a anotar\n", getpid());
-          *(semaphoreGoalB->resource) = *(semaphoreGoalB->resource) + 1;
-          printf("El equipo %c ha anotado!!!\n", equipo);
-          signal_semaphore(semaphoreGoalB);
-        } else {
-          //Anoto en la cancha A
-          wait_semaphore(semaphoreGoalA, &set);
-          printf("[JUGADOR %d]: Tengo la bola y la cancha. Voy a anotar\n", getpid());
-          *(semaphoreGoalA->resource) = *(semaphoreGoalA->resource) + 1;
-          printf("El equipo %c ha anotado!!!\n", equipo);
-          signal_semaphore(semaphoreGoalA);
+      if(portero){
+        printf("SOY PORTERO\n");
+        while(!*finPartido){
+          if (equipo == 'A') {
+            if(wait_semaphore_goals(semaphoreGoalA)){
+              //Consegui la cancha estoy atajando
+              sleep(5);//Protejo la cancha por n segundos
+              signal_semaphore_goals(semaphoreGoalA);
+            }
+          }else{
+            if(wait_semaphore_goals(semaphoreGoalB)){
+              //Consegui la cancha estoy atajando
+              sleep(5);//Protejo la cancha por n segundos
+              signal_semaphore_goals(semaphoreGoalB);
+            }
+          }
+          sleep(5);//Espero n segundos hasta volver a proteger
+
         }
-        printf("[JUGADOR %d]: Voy a soltar la bola\n", getpid());
-        signal_semaphore(semaphoreBall);
-        printf("[JUGADOR %d]: Solté la bola\n", getpid());
-    	sleep (5);
+      }else{
+        while(!*finPartido){
+          sleep (5);//Tiempo antes de ir a volver a buscar el balon
+          printf("[JUGADOR %d]: Voy a jugar\n", getpid());
+          //Ahora deben obtener el recurso bola y la cancha
+          wait_semaphore(semaphoreBall, &set);
+          //TENGO LA BOLA, ahora busco la cancha
+          printf("[JUGADOR %d]: Tengo la bola, voy a buscar la cancha\n", getpid());
+          if (equipo == 'A') {
+            //Anoto en la cancha B
+            if(wait_semaphore_goals(semaphoreGoalB)){
+              //Consegui la cancha estoy jugando
+              printf("[JUGADOR %d]: Tengo la bola y la cancha. Voy a anotar\n", getpid());
+              *(semaphoreGoalB->resource) = *(semaphoreGoalB->resource) + 1;
+              printf("El equipo %c ha anotado!!!\nEquipo A: %d | Equipo B: %d\n", equipo,
+                *(semaphoreGoalA->resource),
+                *(semaphoreGoalB->resource)
+              );
+              signal_semaphore_goals(semaphoreGoalB);
+            }else{
+              printf("[JUGADOR %d]: No logra conectar el balon\n", getpid());
+            }
+          } else {
+            //Anoto en la cancha A
+            if(wait_semaphore_goals(semaphoreGoalA)){
+              //Consegui la cancha estoy jugando
+              printf("[JUGADOR %d]: Tengo la bola y la cancha. Voy a anotar\n", getpid());
+              *(semaphoreGoalA->resource) = *(semaphoreGoalA->resource) + 1;
+              printf("El equipo %c ha anotado!!!\nEquipo A: %d | Equipo B: %d\n", equipo,
+                *(semaphoreGoalA->resource),
+                *(semaphoreGoalB->resource)
+              );
+              signal_semaphore_goals(semaphoreGoalA);
+            }else{
+              printf("[JUGADOR %d]: No logra conectar el balon\n", getpid());
+            }
+          }
+          signal_semaphore(semaphoreBall);
+          printf("[JUGADOR %d]: Solté la bola\n", getpid());
+        }
       }
+
 
   	}
 
