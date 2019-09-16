@@ -11,6 +11,7 @@
 
 
 #define PLAYERS_PER_TEAM 5
+#define TOTAL_PLAYERS 5
 
 //Globals cos reasons
 pthread_mutex_t lock;
@@ -53,20 +54,23 @@ struct Nodo{
 
 };
 
-struct Nodo* new_nodo(pid_t data) {
+struct Nodo* new_nodo() {
     struct Nodo* nodo = create_shared_memory(sizeof(struct Nodo));
     nodo->data = create_shared_memory(sizeof(pid_t));
-    *(nodo->data) = data;
+    *(nodo->data) = -2;
     nodo->siguiente = NULL;
     return nodo;
 }
+
 
 struct Cola{
   struct Nodo *inicio;
   struct Nodo *final;
   unsigned int *size;
+  unsigned int *max_size;
 };
 
+//max_size = TOTAL_PLAYERS
 struct Cola* new_cola() {
     struct Cola* cola = create_shared_memory(sizeof(struct Cola));
     cola->inicio = NULL;
@@ -75,10 +79,54 @@ struct Cola* new_cola() {
     *(cola->size) = 0;
     return cola;
 }
+//Estos push y pop funcionan con una cola ya establecida
 
+//Pop: Elimina el valor y lo devuelve al final de la cola
 pid_t pop(struct Cola *cola){
-  cola->size--;
+  *(cola->size) = *(cola->size) - 1;
+  pid_t data = *(cola->inicio->data);
+  cola->final->siguiente = cola->inicio;// Sera el nuevo final
+  cola->final->siguiente->data = NULL;
+  cola->inicio = cola->inicio->siguiente;
 
+  return data;
+}
+
+void push(struct Cola *cola, pid_t pid){
+  if (cola->size == cola->max_size) {
+    printf("ERROR: La cola esta llena\n");
+  }else{
+    struct Nodo *tmp = cola->inicio;
+
+    for (int i = 0; i < *(cola->size); i++) {
+      tmp = tmp->siguiente;
+    }
+
+    if (*(tmp->data) == -2) {
+      *(tmp->data) = pid;
+    }else{
+      printf("ERROR: Ya existen datos en el nodo\n");
+    }
+    *(cola->size) = *(cola->size) + 1;
+  }
+}
+
+void init_push(struct Cola *cola){
+  for (int i = 0; i < TOTAL_PLAYERS; i++) {
+    if (cola->inicio == NULL) {
+      cola->inicio = new_nodo();
+      cola->final = cola->inicio;
+    }else{
+      cola->final->siguiente = new_nodo();
+      cola->final = cola->final->siguiente;
+    }
+  }
+
+}
+/**
+pid_t pop(struct Cola *cola){
+  *(cola->size) = *(cola->size) - 1;
+  printf("POP> %d\n", *(cola->inicio->data));
   pid_t data = *(cola->inicio->data);
   struct Nodo *tmp = cola->inicio;
   cola->inicio = cola->inicio->siguiente;
@@ -88,7 +136,7 @@ pid_t pop(struct Cola *cola){
 }
 
 void push(struct Cola *cola, pid_t data){
-  cola->size++;
+  *(cola->size) = *(cola->size) + 1;
 
   if (cola->inicio == NULL) {
     cola->inicio = new_nodo(data);
@@ -96,9 +144,10 @@ void push(struct Cola *cola, pid_t data){
   }else{
     cola->final->siguiente = new_nodo(data);
     cola->final = cola->final->siguiente;
+
   }
 }
-
+*/
 
 struct Semaphore{
   int *value;
@@ -112,15 +161,14 @@ struct Semaphore* new_semaphore(int* pResource) {
     *(sem->value) = 1;
     sem->resource = pResource;
     sem->cola = new_cola();
+    init_push(sem->cola);
     return sem;
 }
 
 //El proceso que desea el recurso lo solicita
 void wait_semaphore(struct Semaphore* sem, sigset_t* set){
   int return_val;
-  printf("VALOR ANTES WAIT > %d\n", *(sem -> value));
   *(sem -> value) = *(sem -> value) - 1; // *(sem -> value)--  NO SIRVE
-  printf("VALOR DESPUES WAIT > %d\n", *(sem -> value));
   if(*(sem -> value) < 0){
     //Se debe agregar a la lista de procesos que esperan el recurso
     push(sem->cola, getpid());
@@ -132,9 +180,7 @@ void wait_semaphore(struct Semaphore* sem, sigset_t* set){
 
 //El proceso que ya uso el recurso lo notifica
 void signal_semaphore (struct Semaphore* sem){
-  printf("VALOR ANTES SIGNAL > %d\n", *(sem -> value));
   *(sem -> value) = *(sem -> value) + 1;
-  printf("VALOR DESPUES SIGNAL > %d\n", *(sem -> value));
   if(*(sem -> value) <= 0){//Hay procesos esperando
     pid_t process_wakeup = pop(sem->cola);
     printf("El proceso a despertar es: %d\n", process_wakeup);
