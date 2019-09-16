@@ -54,6 +54,8 @@ struct Cola{
 
 struct Cola* new_cola() {
     struct Cola* cola = create_shared_memory(sizeof(struct Cola));
+    cola->inicio = create_shared_memory(sizeof(struct Nodo));
+    cola->final = create_shared_memory(sizeof(struct Nodo));
     cola->inicio = NULL;
     cola->final = NULL;
     cola->size = create_shared_memory(sizeof(int));
@@ -62,18 +64,29 @@ struct Cola* new_cola() {
 }
 
 pid_t pop(struct Cola *cola){
-  cola->size--;
+    if (cola->inicio == NULL) {
+        printf("This is a NULL pointer\n");
+        return 0;
+    }
 
-  pid_t data = *(cola->inicio->data);
-  struct Nodo *tmp = cola->inicio;
-  cola->inicio = cola->inicio->siguiente;
+    *(cola->size) = *(cola->size) - 1;
+    pid_t data = *(cola->inicio->data);
 
-  free(tmp);
-  return data;
+    if (cola->inicio == cola->final){    
+        cola->inicio = NULL;
+        cola->final = NULL;
+        return data;
+    } else {
+        struct Nodo *tmp = cola->inicio;
+        cola->inicio = cola->inicio->siguiente;
+
+        //free(tmp);
+        return data;
+    }
 }
 
 void push(struct Cola *cola, pid_t data){
-  cola->size++;
+  *(cola->size) = *(cola->size) + 1;
 
   if (cola->inicio == NULL) {
     cola->inicio = new_nodo(data);
@@ -103,9 +116,9 @@ struct Semaphore* new_semaphore(int* pResource) {
 //El proceso que desea el recurso lo solicita
 void wait_semaphore(struct Semaphore* sem, sigset_t* set){
   int return_val;
-  printf("VALOR ANTES WAIT > %d\n", *(sem -> value));
+  //printf("VALOR ANTES WAIT > %d\n", *(sem -> value));
   *(sem -> value) = *(sem -> value) - 1; // *(sem -> value)--  NO SIRVE
-  printf("VALOR DESPUES WAIT > %d\n", *(sem -> value));
+  //printf("VALOR DESPUES WAIT > %d\n", *(sem -> value));
   if(*(sem -> value) < 0){
     //Se debe agregar a la lista de procesos que esperan el recurso
     push(sem->cola, getpid());
@@ -117,10 +130,11 @@ void wait_semaphore(struct Semaphore* sem, sigset_t* set){
 
 //El proceso que ya uso el recurso lo notifica
 void signal_semaphore (struct Semaphore* sem){
-  printf("VALOR ANTES SIGNAL > %d\n", *(sem -> value));
+  //printf("VALOR ANTES SIGNAL > %d\n", *(sem -> value));
   *(sem -> value) = *(sem -> value) + 1;
-  printf("VALOR DESPUES SIGNAL > %d\n", *(sem -> value));
+  //printf("VALOR DESPUES SIGNAL > %d\n", *(sem -> value));
   if(*(sem -> value) <= 0){//Hay procesos esperando
+    printf("Llegué hasta aquí :p cola-size:%d \n", *sem->cola->size);
     pid_t process_wakeup = pop(sem->cola);
     printf("El proceso a despertar es: %d\n", process_wakeup);
     kill(process_wakeup, SIGUSR1);//Suena que lo mato, pero no es asi
@@ -210,11 +224,10 @@ int main(){
   		}
   	}else{
   		//Todos los hijos van a esperar a que inicie el partido
-      while (!*inicioPartido) {
-        ;//BUSY WAITNG
-      }
+      while (!*inicioPartido);//BUSY WAITNG
+      
       while(!*finPartido){
-        printf("Voy a jugar\n");
+        printf("[JUGADOR]: Voy a jugar\n");
         //Ahora deben obtener el recurso bola y la cancha
         sleep (1);
         wait_semaphore(semaphoreBall, &set);
@@ -223,8 +236,10 @@ int main(){
         *(semaphoreBall->resource) = *(semaphoreBall->resource) + 1;
         printf("Consegui la bola %d. Yo soy %d\n", *(semaphoreBall->resource), getpid());
         sleep (1);
+        printf("[JUGADOR %d]: Voy a soltar la bola\n", getpid());
         signal_semaphore(semaphoreBall);
-    		sleep (5);
+        printf("[JUGADOR %d]: Solté la bola\n", getpid());
+    	sleep (5);
       }
 
   	}
