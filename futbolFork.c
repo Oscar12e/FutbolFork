@@ -70,13 +70,13 @@ struct Cola* new_cola() {
 
 //Pop: Elimina el valor y lo devuelve al final de la cola
 pid_t pop(struct Cola *cola){
-  *(cola->size) = *(cola->size) - 1;
   pid_t data = *(cola->inicio->data);
+  *(cola->inicio->data) = -2;
   cola->final->siguiente = cola->inicio;// Sera el nuevo final
   cola->inicio = cola->inicio->siguiente;//Nuevo inicio
   cola->final = cola->final->siguiente;
-  cola->final->data = NULL;
-    return data;
+  *(cola->size) = *(cola->size) - 1;
+  return data;
 }
 
 int push(struct Cola *cola, pid_t pid){
@@ -114,6 +114,15 @@ void init_push(struct Cola *cola){
 
 }
 
+void printCola(struct Cola *cola){
+  struct Nodo *tmp = cola->inicio;
+  for (int i = 0; i < TOTAL_PLAYERS; i++){
+    printf("tmp DATOS> %d\n", *(tmp->data));
+    tmp = tmp->siguiente;
+  }
+
+}
+
 struct Semaphore{
   int *value;
   int *resource;
@@ -142,7 +151,7 @@ int wait_semaphore(struct Semaphore* sem, sigset_t* set){
     }
     //Se suspende el proceso para que espere por el recurso
     sigwait(set, &return_val);
-    printf("Soy el siguiente y recibi signal, soy: %d\n", getpid());
+    printf("Soy el siguiente de la cola y recibi la signal, soy: %d\n", getpid());
   }
 
   return 1;
@@ -152,6 +161,7 @@ int wait_semaphore(struct Semaphore* sem, sigset_t* set){
 void signal_semaphore (struct Semaphore* sem){
   *(sem -> value) = *(sem -> value) + 1;
   if(*(sem -> value) <= 0){//Hay procesos esperando
+    //printCola(sem->cola);
     pid_t process_wakeup = pop(sem->cola);
 
     if (process_wakeup == -1){
@@ -186,14 +196,9 @@ void signal_semaphore_goals(struct Semaphore* sem){
   *(sem -> value) = *(sem -> value) + 1;
 }
 
-//Permite hacer operaciones de forma atomica
-int compare_and_swap(int *value, int expected, int new_value){
-  int temp = *value;
-  if (*value == expected)
-    *value = new_value;
-  return temp;
+int random_in_range(int min, int max){
+  return rand() % (max + 1 - min) + min;
 }
-
 
 int main(){
     //Signals info
@@ -202,7 +207,6 @@ int main(){
     sigprocmask(SIG_BLOCK, &set, NULL);
 
     //Program
-    srand(time(NULL));
 
     int* goalA = create_shared_memory( sizeof(int) );
     int* goalB = create_shared_memory( sizeof(int) );
@@ -252,12 +256,15 @@ int main(){
   		c += 1;
   	} while(TOTAL_PLAYERS != c);
 
+    srand(time(NULL) ^ (getpid()<<16));
+
     if (getpid() == parentID) {
   		//Instrucción dirigida al padre
       sleep(1);
       printf("Inicio del partido\n");
       *inicioPartido = true;
-      sleep(5);//Cantidad de segundos que dura el partido
+      sleep(300);//Cantidad de segundos que dura el partido 300seg = 5min
+      printf("TIEMPO EXTRA!!!\n");
       *finPartido = true;
 
   		for (int i = 0; i < TOTAL_PLAYERS; i++) {
@@ -271,39 +278,42 @@ int main(){
   	}else{
   		//Todos los hijos van a esperar a que inicie el partido
       while (!*inicioPartido);//BUSY WAITNG
-
+      int randomWait;
       if(portero){
-        printf("SOY PORTERO\n");
+        printf("[%c | PORTERO %d]: Voy a proteger la cancha\n", equipo, getpid());
         while(!*finPartido){
+          randomWait = random_in_range(5, 20);
           if (equipo == 'A') {
             if(wait_semaphore_goals(semaphoreGoalA)){
               //Consegui la cancha estoy atajando
-              sleep(5);//Protejo la cancha por n segundos
+              sleep (randomWait);//Protejo la cancha por n segundos
               signal_semaphore_goals(semaphoreGoalA);
             }
           }else{
             if(wait_semaphore_goals(semaphoreGoalB)){
               //Consegui la cancha estoy atajando
-              sleep(5);//Protejo la cancha por n segundos
+              sleep (randomWait);//Protejo la cancha por n segundos
               signal_semaphore_goals(semaphoreGoalB);
             }
           }
-          sleep(5);//Espero n segundos hasta volver a proteger
+          printf("[%c | PORTERO %d]: Protegi la cancha por %d segundos.\n", equipo, getpid(), randomWait);
+          sleep (random_in_range(5, 20));//Espero n segundos hasta volver a proteger
 
         }
       }else{
         while(!*finPartido){
-          sleep (5);//Tiempo antes de ir a volver a buscar el balon
-          printf("[JUGADOR %d]: Voy a jugar\n", getpid());
+          randomWait = random_in_range(5, 20);
+          sleep (randomWait);//Tiempo antes de ir a volver a buscar el balon
+          printf("[%c | JUGADOR %d]: Voy a buscar el balon. Tiempo de espera [%d segundos]\n", equipo, getpid(), randomWait);
           //Ahora deben obtener el recurso bola y la cancha
           wait_semaphore(semaphoreBall, &set);
           //TENGO LA BOLA, ahora busco la cancha
-          printf("[JUGADOR %d]: Tengo la bola, voy a buscar la cancha\n", getpid());
+          printf("[%c | JUGADOR %d]: Tengo la bola, voy a buscar la cancha\n", equipo, getpid());
           if (equipo == 'A') {
             //Anoto en la cancha B
             if(wait_semaphore_goals(semaphoreGoalB)){
               //Consegui la cancha estoy jugando
-              printf("[JUGADOR %d]: Tengo la bola y la cancha. Voy a anotar\n", getpid());
+              printf("[%c | JUGADOR %d]: Tengo la bola y la cancha. Voy a anotar\n", equipo, getpid());
               *(semaphoreGoalB->resource) = *(semaphoreGoalB->resource) + 1;
               printf("El equipo %c ha anotado!!!\nEquipo A: %d | Equipo B: %d\n", equipo,
                 *(semaphoreGoalA->resource),
@@ -311,13 +321,13 @@ int main(){
               );
               signal_semaphore_goals(semaphoreGoalB);
             }else{
-              printf("[JUGADOR %d]: No logra conectar el balon\n", getpid());
+              printf("[%c | JUGADOR %d]: No logra conectar el balon. PORTERO!!!\n", equipo, getpid());
             }
           } else {
             //Anoto en la cancha A
             if(wait_semaphore_goals(semaphoreGoalA)){
               //Consegui la cancha estoy jugando
-              printf("[JUGADOR %d]: Tengo la bola y la cancha. Voy a anotar\n", getpid());
+              printf("[%c | JUGADOR %d]: Tengo la bola y la cancha. Voy a anotar\n", equipo, getpid());
               *(semaphoreGoalA->resource) = *(semaphoreGoalA->resource) + 1;
               printf("El equipo %c ha anotado!!!\nEquipo A: %d | Equipo B: %d\n", equipo,
                 *(semaphoreGoalA->resource),
@@ -325,11 +335,12 @@ int main(){
               );
               signal_semaphore_goals(semaphoreGoalA);
             }else{
-              printf("[JUGADOR %d]: No logra conectar el balon\n", getpid());
+              printf("[%c | JUGADOR %d]: No logra conectar el balon. PORTERO!!!\n", equipo, getpid());
             }
           }
+          printf("ANtes de soltar el balon\n");
           signal_semaphore(semaphoreBall);
-          printf("[JUGADOR %d]: Solté la bola\n", getpid());
+          printf("[%c | JUGADOR %d]: Solté la bola\n", equipo, getpid());
         }
       }
 
